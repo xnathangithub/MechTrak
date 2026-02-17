@@ -23,6 +23,8 @@ Mech Trak is designed for players who take **custom training seriously**. The pl
 - Load a session to begin tracking
 - Visualize your progress across all sessions using 6 different graph types
 
+![Stats Dashboard Screen](images/home > stats.png)
+*The Mech Trak Stats Page displayed with multiple sessions*
 ---
 
 ## Requirements
