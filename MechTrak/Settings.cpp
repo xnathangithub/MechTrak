@@ -18,7 +18,7 @@ void Settings::CreateFile(std::shared_ptr<CVarManagerWrapper> cvarManager)
 
     settingsFile << "MECH TRAK|HUD Options\n";
     settingsFile << "BUTTON|Hide HUD|mechtrak_hide_hud_toggle\n";
-    settingsFile << "BUTTON|Compact HUD|mechtrak_compact_hud_toggle\n";
+    settingsFile << "BUTTON|Compact HUD|togglemenu mechtrak\n";
 
     settingsFile.close();
     cvarManager->log("Settings file created!");
