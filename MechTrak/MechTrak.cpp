@@ -1,4 +1,4 @@
-﻿#pragma comment(lib, "pluginsdk.lib")
+#pragma comment(lib, "pluginsdk.lib")
 #include "pch.h"
 #include "MechTrak.h"
 #include <filesystem>
@@ -6,44 +6,43 @@
 
 BAKKESMOD_PLUGIN(MechTrak, "MechTrak", "1.0", PLUGINTYPE_FREEPLAY)
 
+// Required by PluginWindow — sets the ImGui context so our DLL uses the
+// same ImGui instance as BakkesMod (critical, prevents context mismatch crash)
+void MechTrak::SetImGuiContext(uintptr_t ctx)
+{
+    ImGui::SetCurrentContext(reinterpret_cast<ImGuiContext*>(ctx));
+}
+
+// Called every frame while the PluginWindow is open.
+// ImGui::Begin/End and ImDrawList are fully valid here.
+void MechTrak::Render()
+{
+    HUD::RenderImGui(cvarManager, gameWrapper,
+        shotStats, shotTypes, currentShotNumber, sessionActive);
+}
+
 void MechTrak::onLoad()
 {
-    // Auto-add to plugins.cfg if not already there
-    std::filesystem::path configPath = gameWrapper->GetBakkesModPath();
-    configPath = configPath / "cfg" / "plugins.cfg";
-
-    std::ifstream configFile(configPath);
+    // ── Auto-add to plugins.cfg ──────────────────────────────────────────
+    std::filesystem::path cfgPath = gameWrapper->GetBakkesModPath() / "cfg" / "plugins.cfg";
+    std::ifstream cfgIn(cfgPath);
+    bool found = false;
     std::string line;
-    bool foundPlugin = false;
-
-    // Check if already in config
-    if (configFile.is_open()) {
-        while (std::getline(configFile, line)) {
-            if (line.find("plugin load mechtrak") != std::string::npos) {
-                foundPlugin = true;
-                break;
-            }
-        }
-        configFile.close();
+    if (cfgIn.is_open()) {
+        while (std::getline(cfgIn, line))
+            if (line.find("plugin load mechtrak") != std::string::npos) { found = true; break; }
+        cfgIn.close();
     }
-
-    // Add to config if not found
-    if (!foundPlugin) {
-        std::ofstream configFileOut(configPath, std::ios::app);
-        if (configFileOut.is_open()) {
-            configFileOut << "\nplugin load mechtrak\n";
-            configFileOut.close();
-            cvarManager->log("MechTrak added to auto-load!");
-        }
+    if (!found) {
+        std::ofstream out(cfgPath, std::ios::app);
+        if (out.is_open()) { out << "\nplugin load mechtrak\n"; out.close(); }
     }
 
     cvarManager->log("Mech Trak plugin loaded!");
 
-    // Create settings catagory in bakkes plugin manager
     Settings::CreateFile(cvarManager);
     Settings::RegisterCvars(cvarManager);
 
-    // Init
     currentShotNumber = 1;
     shotTypes[currentShotNumber] = "Unknown";
     shotStats[currentShotNumber] = ShotStats();
@@ -51,106 +50,99 @@ void MechTrak::onLoad()
     sessionId = Session::GenerateId();
     sessionStartTime = std::chrono::system_clock::now();
 
-    // Hook events
+    // ── Game event hooks ─────────────────────────────────────────────────
     gameWrapper->HookEvent("Function TAGame.Ball_TA.Explode",
         std::bind(&MechTrak::OnBallExplode, this, std::placeholders::_1));
-
     gameWrapper->HookEvent("Function TAGame.Team_TA.EventScoreUpdated",
         std::bind(&MechTrak::OnGoalScored, this, std::placeholders::_1));
-
     gameWrapper->HookEvent("Function TAGame.GameEvent_TrainingEditor_TA.StartNewRound",
         std::bind(&MechTrak::OnShotReset, this, std::placeholders::_1));
-
     gameWrapper->HookEvent("Function TAGame.Ball_TA.OnCarTouch",
-        [this](std::string eventName) { roundActive = true; });
+        [this](std::string) { roundActive = true; });
 
-    // HUD
+    // ── Canvas HUD drawable ───────────────────────────────────────────────
     gameWrapper->RegisterDrawable([this](CanvasWrapper canvas) {
         HUD::Render(canvas, cvarManager, gameWrapper,
             shotStats, shotTypes, currentShotNumber, sessionActive);
         });
 
-	// Notifiers / Commands
-    cvarManager->registerNotifier("stats_current", [this](std::vector<std::string> args) {
-        if (shotStats.find(currentShotNumber) != shotStats.end()) {
-            auto stats = shotStats[currentShotNumber];
-            cvarManager->log("Shot " + std::to_string(currentShotNumber) + ": " +
-                std::to_string(stats.attempts) + " attempts, " +
-                std::to_string(stats.goals) + " goals");
+    // ── Compact HUD toggle — opens/closes the PluginWindow ────────────────
+    // Settings.cpp registers a BUTTON that calls mechtrak_compact_hud_toggle.
+    // We override that notifier here to also fire togglemenu.
+    cvarManager->registerNotifier("mechtrak_compact_hud_toggle",
+        [this](std::vector<std::string>) {
+            auto cvar = cvarManager->getCvar("mechtrak_compact_hud");
+            bool nowOn = !cvar.getBoolValue();
+            cvar.setValue(nowOn ? 1 : 0);
+            // Open or close the PluginWindow
+            cvarManager->executeCommand(nowOn ? "togglemenu mechtrak" : "togglemenu mechtrak");
+        }, "Toggle compact HUD", PERMISSION_ALL);
+
+    // ── Other notifiers ───────────────────────────────────────────────────
+    cvarManager->registerNotifier("stats_current", [this](std::vector<std::string>) {
+        if (shotStats.count(currentShotNumber)) {
+            auto& s = shotStats[currentShotNumber];
+            cvarManager->log("Shot " + std::to_string(currentShotNumber) + ": " + std::to_string(s.attempts) + " attempts, " + std::to_string(s.goals) + " goals");
         }
         }, "Shows current shot stats", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_show", [this](std::vector<std::string> args) {
-        for (const auto& shot : shotStats) {
-            float accuracy = shot.second.attempts > 0
-                ? (float)shot.second.goals / shot.second.attempts * 100.0f : 0.0f;
-            cvarManager->log("Shot " + std::to_string(shot.first) + ": " +
-                std::to_string(shot.second.attempts) + " attempts, " +
-                std::to_string(shot.second.goals) + " goals (" +
-                std::to_string((int)accuracy) + "%)");
+    cvarManager->registerNotifier("stats_show", [this](std::vector<std::string>) {
+        for (auto& [id, s] : shotStats) {
+            float acc = s.attempts > 0 ? (float)s.goals / s.attempts * 100.f : 0.f;
+            cvarManager->log("Shot " + std::to_string(id) + ": " + std::to_string(s.attempts) + " attempts, " + std::to_string(s.goals) + " goals (" + std::to_string((int)acc) + "%)");
         }
         }, "Shows all stats", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_reset", [this](std::vector<std::string> args) {
-        shotStats.clear();
-        currentShotNumber = 1;
-        shotStats[currentShotNumber] = ShotStats();
+    cvarManager->registerNotifier("stats_reset", [this](std::vector<std::string>) {
+        shotStats.clear(); currentShotNumber = 1; shotStats[currentShotNumber] = ShotStats();
         cvarManager->log("Stats reset!");
         }, "Reset all stats", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_save", [this](std::vector<std::string> args) {
-        Session::SaveToFile(cvarManager, sessionId, sessionActive,
-            sessionStartTime, shotStats, shotTypes);
+    cvarManager->registerNotifier("stats_save", [this](std::vector<std::string>) {
+        Session::SaveToFile(cvarManager, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes);
         }, "Save stats", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_upload", [this](std::vector<std::string> args) {
-        Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive,
-            sessionStartTime, shotStats, shotTypes, currentShotNumber);
+    cvarManager->registerNotifier("stats_upload", [this](std::vector<std::string>) {
+        Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
         }, "Upload session", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_key_prev", [this](std::vector<std::string> args) {
+    cvarManager->registerNotifier("stats_key_prev", [this](std::vector<std::string>) {
         if (currentShotNumber > 1) {
             currentShotNumber--;
-            if (shotStats.find(currentShotNumber) == shotStats.end())
-                shotStats[currentShotNumber] = ShotStats();
+            if (!shotStats.count(currentShotNumber))shotStats[currentShotNumber] = ShotStats();
         }
         }, "Previous shot", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_key_next", [this](std::vector<std::string> args) {
+    cvarManager->registerNotifier("stats_key_next", [this](std::vector<std::string>) {
         currentShotNumber++;
-        if (shotStats.find(currentShotNumber) == shotStats.end())
-            shotStats[currentShotNumber] = ShotStats();
-        if (shotTypes.find(currentShotNumber) == shotTypes.end())
-            shotTypes[currentShotNumber] = "Unknown";
+        if (!shotStats.count(currentShotNumber))shotStats[currentShotNumber] = ShotStats();
+        if (!shotTypes.count(currentShotNumber))shotTypes[currentShotNumber] = "Unknown";
         }, "Next shot", PERMISSION_ALL);
 
-    cvarManager->registerNotifier("stats_end_session", [this](std::vector<std::string> args) {
+    cvarManager->registerNotifier("stats_end_session", [this](std::vector<std::string>) {
         sessionActive = false;
-        Session::SaveToFile(cvarManager, sessionId, sessionActive,
-            sessionStartTime, shotStats, shotTypes);
-        Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive,
-            sessionStartTime, shotStats, shotTypes, currentShotNumber);
-
-        sessionId = Session::GenerateId();
-        sessionStartTime = std::chrono::system_clock::now();
-        sessionActive = true;
-        shotStats.clear();
-        shotTypes.clear();
-        currentShotNumber = 1;
-        shotStats[currentShotNumber] = ShotStats();
-        shotTypes[currentShotNumber] = "Unknown";
+        Session::SaveToFile(cvarManager, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes);
+        Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+        sessionId = Session::GenerateId(); sessionStartTime = std::chrono::system_clock::now(); sessionActive = true;
+        shotStats.clear(); shotTypes.clear(); currentShotNumber = 1;
+        shotStats[currentShotNumber] = ShotStats(); shotTypes[currentShotNumber] = "Unknown";
         cvarManager->log("New session started: " + sessionId);
         }, "End session", PERMISSION_ALL);
 
     cvarManager->executeCommand("bind F8 stats_key_prev");
     cvarManager->executeCommand("bind F9 stats_key_next");
 
-    // Load active session and start heartbeat
-    gameWrapper->SetTimeout([this](GameWrapper* gw) {
-        Session::LoadActive(cvarManager, sessionId, sessionActive,
-            shotStats, shotTypes, currentShotNumber);
-        Heartbeat::Start(cvarManager, gameWrapper, sessionId, sessionActive,
-            shotStats, shotTypes, currentShotNumber);
+    // ── Delayed init ──────────────────────────────────────────────────────
+    gameWrapper->SetTimeout([this](GameWrapper*) {
+        Session::LoadActive(cvarManager, sessionId, sessionActive, shotStats, shotTypes, currentShotNumber);
+
+        std::thread([this]() {
+            std::string token = Session::GetPluginToken(cvarManager);
+            if (!token.empty())
+                cvarManager->log("MechTrak: token ready (" + std::to_string(token.length()) + " chars)");
+            }).detach();
+
+        Heartbeat::Start(cvarManager, gameWrapper, sessionId, sessionActive, shotStats, shotTypes, currentShotNumber);
         }, 2.0f);
 }
 
@@ -159,147 +151,77 @@ void MechTrak::onUnload()
     cvarManager->log("Mech Trak plugin unloaded!");
 }
 
+// ─── Game event handlers ──────────────────────────────────────────────────────
 
-/*
-                //  LOGIC FOR COMPUTING ATTEMPTS AND GOALS. //
-
-
-Attempts are triggered for every ball explosion or resetting ball through manual reset. 
-Ball explosions trigger when user scores or when the ball touches ground after time expires.
-
-For every goal it will add an attempt and also add 1 to the goals scored.
-
-Due to detection during goal replay (if ball explodes in replay then it will count as an attempt).
-I corrected this error by implementing a 12 second timer to ignore any attempts after a goal is scored.
-
-This timer is reset/removed either after a user resets ball manually or player touches ball again.
-This is implemented so if timer is still running it will cancel the timer so the attempt is counted.
-
-
-                //LOGIC FOR RESETING BALL. //
-
-Reseting will only count as an attempt if user touches the ball first, this is to prevent accidental attempts when a round was not supposed to start.
-
-*/
-
-void MechTrak::OnBallExplode(std::string eventName)
+void MechTrak::OnBallExplode(std::string)
 {
     if (!gameWrapper->IsInCustomTraining()) return;
-
     auto now = std::chrono::steady_clock::now();
-    auto timeSinceGoal = std::chrono::duration_cast<std::chrono::seconds>(
-        now - lastGoalTime).count();
-
-    if (timeSinceGoal < 12) {
-        lastGoalTime = std::chrono::steady_clock::time_point();
-        return;
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastGoalTime).count() < 12) {
+        lastGoalTime = std::chrono::steady_clock::time_point(); return;
     }
-
-    if (shotStats.find(currentShotNumber) == shotStats.end())
-        shotStats[currentShotNumber] = ShotStats();
-
+    if (!shotStats.count(currentShotNumber))shotStats[currentShotNumber] = ShotStats();
     shotStats[currentShotNumber].attempts++;
     shotStats[currentShotNumber].attemptHistory.push_back(false);
     justRecordedAttempt = true;
-
     if (!uploadInProgress) {
         uploadInProgress = true;
-        auto shotStatsCopy = shotStats;
-        auto shotTypesCopy = shotTypes;
-        auto sessionIdCopy = sessionId;
-        auto sessionStartTimeCopy = sessionStartTime;
-
-        std::thread([this, shotStatsCopy, shotTypesCopy, sessionIdCopy, sessionStartTimeCopy]() mutable {
-            Session::SaveToFile(cvarManager, sessionIdCopy, sessionActive,
-                sessionStartTimeCopy, shotStatsCopy, shotTypesCopy);
-            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive,
-                sessionStartTime, shotStats, shotTypes, currentShotNumber);
-            uploadInProgress = false;
-            }).detach();
+        auto sc = shotStats; auto tc = shotTypes; auto ic = sessionId; auto tm = sessionStartTime;
+        std::thread([this, sc, tc, ic, tm]()mutable {
+            Session::SaveToFile(cvarManager, ic, sessionActive, tm, sc, tc);
+            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+            uploadInProgress = false; }).detach();
     }
 }
 
-void MechTrak::OnShotReset(std::string eventName)
+void MechTrak::OnShotReset(std::string)
 {
     if (!gameWrapper->IsInCustomTraining()) return;
-
     lastGoalTime = std::chrono::steady_clock::time_point();
-
     if (roundActive && !justRecordedAttempt) {
-        if (shotStats.find(currentShotNumber) == shotStats.end())
-            shotStats[currentShotNumber] = ShotStats();
+        if (!shotStats.count(currentShotNumber))shotStats[currentShotNumber] = ShotStats();
         shotStats[currentShotNumber].attempts++;
         shotStats[currentShotNumber].attemptHistory.push_back(false);
     }
-
-    roundActive = false;
-    justRecordedAttempt = false;
-
+    roundActive = false; justRecordedAttempt = false;
     if (!uploadInProgress) {
         uploadInProgress = true;
-        auto shotStatsCopy = shotStats;
-        auto shotTypesCopy = shotTypes;
-        auto sessionIdCopy = sessionId;
-        auto sessionStartTimeCopy = sessionStartTime;
-
-        std::thread([this, shotStatsCopy, shotTypesCopy, sessionIdCopy, sessionStartTimeCopy]() mutable {
-            Session::SaveToFile(cvarManager, sessionIdCopy, sessionActive,
-                sessionStartTimeCopy, shotStatsCopy, shotTypesCopy);
-            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive,
-                sessionStartTime, shotStats, shotTypes, currentShotNumber);
-            uploadInProgress = false;
-            }).detach();
+        auto sc = shotStats; auto tc = shotTypes; auto ic = sessionId; auto tm = sessionStartTime;
+        std::thread([this, sc, tc, ic, tm]()mutable {
+            Session::SaveToFile(cvarManager, ic, sessionActive, tm, sc, tc);
+            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+            uploadInProgress = false; }).detach();
     }
 }
 
-void MechTrak::OnGoalScored(std::string eventName)
+void MechTrak::OnGoalScored(std::string)
 {
     if (!gameWrapper->IsInCustomTraining()) return;
-
     ServerWrapper server = gameWrapper->GetCurrentGameState();
     if (server.IsNull()) return;
-
     auto teams = server.GetTeams();
     if (teams.Count() == 0) return;
-
     int currentScore = teams.Get(0).GetScore();
-    if (currentScore <= lastKnownScore) {
-        lastKnownScore = currentScore;
-        return;
-    }
+    if (currentScore <= lastKnownScore) { lastKnownScore = currentScore; return; }
     lastKnownScore = currentScore;
-
     auto now = std::chrono::steady_clock::now();
-    auto timeSinceLastGoal = std::chrono::duration_cast<std::chrono::seconds>(
-        now - lastGoalTime).count();
-
-    if (timeSinceLastGoal >= 2 && timeSinceLastGoal < 12 &&
-        shotStats.find(currentShotNumber) != shotStats.end()) {
+    auto timeSince = std::chrono::duration_cast<std::chrono::seconds>(now - lastGoalTime).count();
+    if (timeSince >= 2 && timeSince < 12 && shotStats.count(currentShotNumber)) {
         shotStats[currentShotNumber].attempts++;
         shotStats[currentShotNumber].attemptHistory.push_back(true);
     }
-
     lastGoalTime = std::chrono::steady_clock::now();
-
-    if (shotStats.find(currentShotNumber) != shotStats.end()) {
+    if (shotStats.count(currentShotNumber)) {
         shotStats[currentShotNumber].goals++;
         shotStats[currentShotNumber].attemptHistory.push_back(true);
         justRecordedAttempt = true;
     }
-
     if (!uploadInProgress) {
         uploadInProgress = true;
-        auto shotStatsCopy = shotStats;
-        auto shotTypesCopy = shotTypes;
-        auto sessionIdCopy = sessionId;
-        auto sessionStartTimeCopy = sessionStartTime;
-
-        std::thread([this, shotStatsCopy, shotTypesCopy, sessionIdCopy, sessionStartTimeCopy]() mutable {
-            Session::SaveToFile(cvarManager, sessionIdCopy, sessionActive,
-                sessionStartTimeCopy, shotStatsCopy, shotTypesCopy);
-            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive,
-                sessionStartTime, shotStats, shotTypes, currentShotNumber);
-            uploadInProgress = false;
-            }).detach();
+        auto sc = shotStats; auto tc = shotTypes; auto ic = sessionId; auto tm = sessionStartTime;
+        std::thread([this, sc, tc, ic, tm]()mutable {
+            Session::SaveToFile(cvarManager, ic, sessionActive, tm, sc, tc);
+            Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+            uploadInProgress = false; }).detach();
     }
 }
