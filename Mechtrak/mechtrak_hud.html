@@ -1,0 +1,668 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MechTrak HUD</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Orbitron:wght@700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: transparent;
+            font-family: 'Rajdhani', sans-serif;
+            /* Position HUD in top-right during game */
+            display: flex;
+            justify-content: flex-end;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 18px;
+            pointer-events: none;
+        }
+
+        /* ── Panel ───────────────────────────────────────────── */
+        .hud {
+            width: 260px;
+            border-radius: 14px;
+            overflow: hidden;
+            background: linear-gradient(160deg, rgba(8, 12, 28, 0.94) 0%, rgba(12, 18, 40, 0.96) 100% );
+            border: 1px solid rgba(80, 140, 255, 0.25);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset, 0 8px 40px rgba(0,0,0,0.7), 0 0 60px rgba(40, 100, 255, 0.08);
+            animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(30px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* ── Header ──────────────────────────────────────────── */
+        .header {
+            background: linear-gradient(90deg, rgba(40, 90, 220, 0.9) 0%, rgba(70, 120, 255, 0.9) 50%, rgba(50, 100, 240, 0.9) 100% );
+            padding: 9px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            border-bottom: 1px solid rgba(120, 180, 255, 0.3);
+        }
+
+        .header-title {
+            font-family: 'Orbitron', monospace;
+            font-size: 13px;
+            font-weight: 900;
+            letter-spacing: 2.5px;
+            color: #fff;
+            text-shadow: 0 0 20px rgba(150,200,255,0.8);
+        }
+
+        .header-close {
+            position: absolute;
+            right: 12px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            color: rgba(255,255,255,0.7);
+            cursor: pointer;
+            pointer-events: all;
+            transition: background 0.2s;
+        }
+
+            .header-close:hover {
+                background: rgba(255,80,80,0.5);
+            }
+
+        /* ── Body ────────────────────────────────────────────── */
+        .body {
+            padding: 10px 12px 14px;
+        }
+
+        /* ── Shot label pill ─────────────────────────────────── */
+        .shot-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(80,140,255,0.3);
+            border-radius: 6px;
+            padding: 4px 10px 4px 8px;
+            margin-bottom: 12px;
+        }
+
+        .shot-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #4d9fff;
+            box-shadow: 0 0 8px #4d9fff;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%,100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.5;
+                transform: scale(0.8);
+            }
+        }
+
+        .shot-label {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #c8dcff;
+            text-transform: uppercase;
+        }
+
+        /* ── Stats row (pie + numbers) ───────────────────────── */
+        .stats-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        /* ── Pie chart ───────────────────────────────────────── */
+        .pie-wrap {
+            position: relative;
+            flex-shrink: 0;
+            width: 96px;
+            height: 96px;
+        }
+
+            .pie-wrap svg {
+                width: 100%;
+                height: 100%;
+                transform: rotate(-90deg);
+            }
+
+        .pie-bg {
+            fill: none;
+            stroke: rgba(255,255,255,0.06);
+        }
+
+        .pie-track {
+            fill: none;
+            stroke: rgba(30,50,100,0.6);
+        }
+
+        .pie-fill {
+            fill: none;
+            stroke: url(#pieGrad);
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .pie-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .pie-pct {
+            font-family: 'Orbitron', monospace;
+            font-size: 18px;
+            font-weight: 900;
+            color: #fff;
+            line-height: 1;
+            text-shadow: 0 0 12px rgba(77,159,255,0.8);
+        }
+
+        .pie-sub {
+            font-size: 8px;
+            font-weight: 600;
+            letter-spacing: 1.5px;
+            color: rgba(150,190,255,0.7);
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        /* ── Stat numbers ────────────────────────────────────── */
+        .stat-stack {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .stat-item {
+        }
+
+        .stat-value {
+            font-family: 'Orbitron', monospace;
+            font-size: 18px;
+            font-weight: 700;
+            color: #ffffff;
+            line-height: 1;
+            letter-spacing: -0.5px;
+        }
+
+        .stat-badge {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 1.5px;
+            color: rgba(120,170,255,0.8);
+            text-transform: uppercase;
+            background: rgba(40,80,180,0.25);
+            border: 1px solid rgba(60,110,220,0.2);
+            border-radius: 3px;
+            padding: 1px 5px;
+            margin-top: 1px;
+        }
+
+        /* ── Divider ─────────────────────────────────────────── */
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .divider-line {
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(80,130,255,0.4) 30%, rgba(80,130,255,0.4) 70%, transparent );
+        }
+
+        .divider-label {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            color: rgba(100,150,255,0.7);
+            text-transform: uppercase;
+        }
+
+        /* ── Best shot row ───────────────────────────────────── */
+        .best-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .trophy-icon {
+            font-size: 18px;
+            filter: drop-shadow(0 0 6px rgba(255,200,50,0.6));
+            flex-shrink: 0;
+        }
+
+        .best-btn {
+            flex: 1;
+            background: linear-gradient(90deg, rgba(40, 90, 220, 0.7), rgba(70, 130, 255, 0.7) );
+            border: 1px solid rgba(100,160,255,0.4);
+            border-radius: 7px;
+            padding: 6px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .best-label {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            color: rgba(180,210,255,0.85);
+            text-transform: uppercase;
+        }
+
+        .best-value {
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            text-shadow: 0 0 10px rgba(100,180,255,0.7);
+        }
+
+        /* ── Progress rows ───────────────────────────────────── */
+        .progress-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+            .progress-row:last-child {
+                margin-bottom: 0;
+            }
+
+        .prog-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+            .prog-icon.goals {
+                background: linear-gradient(135deg, rgba(200,50,50,0.6), rgba(255,80,80,0.4));
+                border: 1px solid rgba(255,100,100,0.3);
+            }
+
+            .prog-icon.shots {
+                background: linear-gradient(135deg, rgba(50,80,200,0.6), rgba(70,120,255,0.4));
+                border: 1px solid rgba(100,150,255,0.3);
+            }
+
+        .prog-body {
+            flex: 1;
+        }
+
+        .prog-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 4px;
+        }
+
+        .prog-name {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            color: rgba(150,190,255,0.7);
+            text-transform: uppercase;
+        }
+
+        .prog-pct {
+            font-family: 'Orbitron', monospace;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .prog-track {
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.06);
+            overflow: hidden;
+            position: relative;
+        }
+
+        .prog-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+        }
+
+            .prog-fill.goals-fill {
+                background: linear-gradient(90deg, #3a7fff, #6db3ff);
+                box-shadow: 0 0 8px rgba(77,159,255,0.5);
+            }
+
+            .prog-fill.shots-fill {
+                background: linear-gradient(90deg, #3a7fff, #6db3ff);
+                box-shadow: 0 0 8px rgba(77,159,255,0.5);
+            }
+
+            /* Shimmer on fill bars */
+            .prog-fill::after {
+                content: '';
+                position: absolute;
+                inset: 0;
+                background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100% );
+                animation: shimmer 2.5s ease-in-out infinite;
+            }
+
+        @keyframes shimmer {
+            0% {
+                transform: translateX(-100%);
+            }
+
+            100% {
+                transform: translateX(300%);
+            }
+        }
+
+        .prog-btn {
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            color: #fff;
+            background: linear-gradient(90deg, rgba(40,90,220,0.8), rgba(70,130,255,0.8) );
+            border: 1px solid rgba(100,160,255,0.4);
+            border-radius: 5px;
+            padding: 5px 8px;
+            text-transform: uppercase;
+            width: 54px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        /* ── No-session state ────────────────────────────────── */
+        .no-session {
+            text-align: center;
+            padding: 20px 10px;
+        }
+
+        .no-session-title {
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            color: #ff8c42;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+            text-shadow: 0 0 12px rgba(255,140,66,0.5);
+        }
+
+        .no-session-sub {
+            font-size: 11px;
+            color: rgba(150,170,210,0.6);
+            letter-spacing: 0.5px;
+        }
+
+        /* ── Scan line overlay ───────────────────────────────── */
+        .hud::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient( 0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px );
+            pointer-events: none;
+            border-radius: 14px;
+            z-index: 10;
+        }
+
+        .hud {
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud" id="hud">
+        <!-- Header -->
+        <div class="header">
+            <span class="header-title">MECHTRAK.GG</span>
+            <div class="header-close" onclick="document.getElementById('hud').style.display='none'">✕</div>
+        </div>
+
+        <!-- Body -->
+        <div class="body" id="hud-body">
+            <!-- Shot pill -->
+            <div class="shot-pill">
+                <div class="shot-dot"></div>
+                <span class="shot-label" id="shot-label">SHOT 1: RESET</span>
+            </div>
+
+            <!-- Stats row -->
+            <div class="stats-row">
+                <!-- SVG Pie -->
+                <div class="pie-wrap">
+                    <svg viewBox="0 0 100 100">
+                        <defs>
+                            <linearGradient id="pieGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#3a7fff" />
+                                <stop offset="100%" stop-color="#a0d0ff" />
+                            </linearGradient>
+                        </defs>
+                        <!-- Background track -->
+                        <circle class="pie-track" cx="50" cy="50" r="40" stroke-width="12" />
+                        <!-- Fill arc -->
+                        <circle id="pie-fill"
+                                class="pie-fill"
+                                cx="50" cy="50" r="40"
+                                stroke-width="12"
+                                stroke-dasharray="251.3"
+                                stroke-dashoffset="251.3" />
+                    </svg>
+                    <div class="pie-center">
+                        <span class="pie-pct" id="pie-pct">0%</span>
+                        <span class="pie-sub">ACC</span>
+                    </div>
+                </div>
+
+                <!-- Stat numbers -->
+                <div class="stat-stack">
+                    <div class="stat-item">
+                        <div class="stat-value" id="stat-accuracy">0%</div>
+                        <div class="stat-badge">Accuracy</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="stat-goals">0</div>
+                        <div class="stat-badge">Goals</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="stat-attempts">0</div>
+                        <div class="stat-badge">Attempts</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Divider -->
+            <div class="divider">
+                <div class="divider-line"></div>
+                <span class="divider-label">Total</span>
+                <div class="divider-line"></div>
+            </div>
+
+            <!-- Best shot -->
+            <div class="best-row">
+                <span class="trophy-icon">🏆</span>
+                <div class="best-btn">
+                    <span class="best-label">Best Shot</span>
+                    <span class="best-value" id="best-shot-pct">—</span>
+                </div>
+            </div>
+
+            <!-- Goals progress -->
+            <div class="progress-row">
+                <div class="prog-icon goals">⚽</div>
+                <div class="prog-body">
+                    <div class="prog-header">
+                        <span class="prog-name">Goals</span>
+                        <span class="prog-pct" id="goals-pct">0%</span>
+                    </div>
+                    <div class="prog-track">
+                        <div class="prog-fill goals-fill" id="goals-bar" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="prog-btn">GOALS</div>
+            </div>
+
+            <!-- Shots progress -->
+            <div class="progress-row">
+                <div class="prog-icon shots">🎯</div>
+                <div class="prog-body">
+                    <div class="prog-header">
+                        <span class="prog-name">Shots</span>
+                        <span class="prog-pct" id="shots-pct">0%</span>
+                    </div>
+                    <div class="prog-track">
+                        <div class="prog-fill shots-fill" id="shots-bar" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="prog-btn">SHOTS</div>
+            </div>
+
+        </div><!-- /body -->
+    </div><!-- /hud -->
+
+    <script>
+  // ── Circumference of r=40 circle = 2π×40 ≈ 251.3 ──────
+  const CIRC = 2 * Math.PI * 40;
+
+  function formatNum(n) {
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return n.toString();
+  }
+
+  function setPie(fraction) {
+    const offset = CIRC * (1 - Math.max(0, Math.min(1, fraction)));
+    document.getElementById('pie-fill').style.strokeDashoffset = offset;
+    const pct = Math.round(fraction * 100) + '%';
+    document.getElementById('pie-pct').textContent = pct;
+    document.getElementById('stat-accuracy').textContent = pct;
+  }
+
+  function updateHUD(data) {
+    /*
+      Expected data shape (written by plugin to a local file / websocket):
+      {
+        sessionActive: true,
+        currentShot: 1,
+        shotType: "Reset",
+        goals: 12,
+        attempts: 50,
+        totalGoals: 80,
+        totalAttempts: 200,
+        bestShotPct: 0.72,
+        shotsFraction: 0.25
+      }
+    */
+
+    if (!data.sessionActive) {
+      document.getElementById('hud-body').innerHTML = `
+        <div class="no-session">
+          <div class="no-session-title">NO ACTIVE SESSION</div>
+          <div class="no-session-sub">Visit mechtrak.gg to begin</div>
+        </div>`;
+      return;
+    }
+
+    const acc = data.attempts > 0 ? data.goals / data.attempts : 0;
+    const totalAcc = data.totalAttempts > 0 ? data.totalGoals / data.totalAttempts : 0;
+
+    document.getElementById('shot-label').textContent =
+      `SHOT ${data.currentShot}${data.shotType ? ': ' + data.shotType.toUpperCase() : ''}`;
+
+    setPie(acc);
+    document.getElementById('stat-goals').textContent    = formatNum(data.goals);
+    document.getElementById('stat-attempts').textContent = formatNum(data.attempts);
+
+    document.getElementById('best-shot-pct').textContent =
+      data.bestShotPct != null ? Math.round(data.bestShotPct * 100) + '%' : '—';
+
+    const goalPct = Math.round(totalAcc * 100);
+    document.getElementById('goals-pct').textContent = goalPct + '%';
+    document.getElementById('goals-bar').style.width  = goalPct + '%';
+
+    const shotPct = Math.round((data.shotsFraction || 0) * 100);
+    document.getElementById('shots-pct').textContent = shotPct + '%';
+    document.getElementById('shots-bar').style.width  = shotPct + '%';
+  }
+
+  // ── Polling: read stats from file written by plugin ────
+  // BakkesMod writes JSON to a known path; we poll every 500ms.
+  // Replace the path below with wherever your plugin writes stats.
+  async function poll() {
+    try {
+      // In a real BakkesMod overlay the plugin serves data via
+      // a local HTTP endpoint or writes to a file the overlay reads.
+      const res = await fetch('http://localhost:7001/mechtrak/stats');
+      if (res.ok) updateHUD(await res.json());
+    } catch (_) { /* plugin not running / no session */ }
+  }
+
+  // Demo mode — remove this block when integrating with plugin
+  (function demo() {
+    let attempts = 0, goals = 0;
+    setInterval(() => {
+      attempts++;
+      if (Math.random() > 0.45) goals++;
+      updateHUD({
+        sessionActive: true,
+        currentShot: 1,
+        shotType: 'Reset',
+        goals,
+        attempts,
+        totalGoals: goals,
+        totalAttempts: attempts,
+        bestShotPct: attempts > 0 ? goals / attempts : 0,
+        shotsFraction: Math.min(1, attempts / 80)
+      });
+    }, 800);
+  })();
+
+  // Start polling (uncomment when integrated)
+  // setInterval(poll, 500);
+    </script>
+</body>
+</html>
