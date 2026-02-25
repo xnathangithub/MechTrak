@@ -18,7 +18,28 @@ void MechTrak::SetImGuiContext(uintptr_t ctx)
 void MechTrak::Render()
 {
     HUD::RenderImGui(cvarManager, gameWrapper,
-        shotStats, shotTypes, currentShotNumber, sessionActive);
+        shotStats, shotTypes, currentShotNumber, sessionActive,
+        showEditPanel,
+        [this]() {
+            cvarManager->executeCommand("stats_end_session");
+        },
+        [this](int shotNum, int newGoals, int newAttempts) {
+            if (!shotStats.count(shotNum)) return;
+            shotStats[shotNum].goals = newGoals < 0 ? 0 : newGoals;
+            shotStats[shotNum].attempts = newAttempts < 0 ? 0 : newAttempts;
+            // Clamp goals <= attempts
+            if (shotStats[shotNum].goals > shotStats[shotNum].attempts)
+                shotStats[shotNum].goals = shotStats[shotNum].attempts;
+            if (!uploadInProgress) {
+                uploadInProgress = true;
+                std::thread([this]() {
+                    Session::SaveToFile(cvarManager, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes);
+                    Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+                    uploadInProgress = false;
+                    }).detach();
+            }
+        }
+    );
 }
 
 void MechTrak::onLoad()
@@ -112,6 +133,15 @@ void MechTrak::onLoad()
         Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
         }, "Upload session", PERMISSION_ALL);
 
+
+    cvarManager->registerNotifier("mechtrak_toggle_edit", [this](std::vector<std::string>) {
+        showEditPanel = !showEditPanel;
+        }, "Toggle edit panel", PERMISSION_ALL);
+    std::string editKey = cvarManager->getCvar("mechtrak_key_edit_panel").getStringValue();
+    std::string flipKey = cvarManager->getCvar("mechtrak_key_flip_last").getStringValue();
+    cvarManager->executeCommand("bind " + editKey + " mechtrak_toggle_edit");
+    cvarManager->executeCommand("bind " + flipKey + " mechtrak_flip_last");
+
     cvarManager->registerNotifier("stats_key_prev", [this](std::vector<std::string>) {
         if (currentShotNumber > 1) {
             currentShotNumber--;
@@ -130,14 +160,71 @@ void MechTrak::onLoad()
         }
         }, "Next shot", PERMISSION_ALL);
 
+
+    // Flip last attempt
+    cvarManager->registerNotifier("mechtrak_flip_last", [this](std::vector<std::string>) {
+        if (!shotStats.count(currentShotNumber)) return;
+        auto& s = shotStats[currentShotNumber];
+        if (s.attemptHistory.empty()) return;
+
+        bool lastWasGoal = s.attemptHistory.back();
+        if (lastWasGoal) {
+            s.goals--;
+            s.attemptHistory.back() = false;
+            cvarManager->log("Corrected: goal -> miss");
+        }
+        else {
+            s.goals++;
+            s.attemptHistory.back() = true;
+            cvarManager->log("Corrected: miss -> goal");
+        }
+        if (s.goals < 0) s.goals = 0;
+        if (s.goals > s.attempts) s.goals = s.attempts;
+
+        if (!uploadInProgress) {
+            uploadInProgress = true;
+            std::thread([this]() {
+                Session::SaveToFile(cvarManager, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes);
+                Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
+                uploadInProgress = false;
+                }).detach();
+        }
+        }, "Flip last attempt goal/miss", PERMISSION_ALL);
+
+
+ 
+
+    // Auto-rebind when user changes the key in settings
+    cvarManager->getCvar("mechtrak_key_edit_panel").addOnValueChanged([this](std::string oldVal, CVarWrapper newCvar) {
+        std::string newKey = newCvar.getStringValue();
+        if (!oldVal.empty())
+            this->cvarManager->executeCommand("unbind " + oldVal);
+        if (!newKey.empty())
+            this->cvarManager->executeCommand("bind " + newKey + " mechtrak_toggle_edit");
+        });
+
+    cvarManager->getCvar("mechtrak_key_flip_last").addOnValueChanged([this](std::string oldVal, CVarWrapper newCvar) {
+        std::string newKey = newCvar.getStringValue();
+        if (!oldVal.empty())
+            this->cvarManager->executeCommand("unbind " + oldVal);
+        if (!newKey.empty())
+            this->cvarManager->executeCommand("bind " + newKey + " mechtrak_flip_last");
+        });
+
+    // Initial key binds — use cvar values so they survive settings changes
+    cvarManager->executeCommand("bind " +
+        cvarManager->getCvar("mechtrak_key_edit_panel").getStringValue() + " mechtrak_toggle_edit");
+    cvarManager->executeCommand("bind " +
+        cvarManager->getCvar("mechtrak_key_flip_last").getStringValue() + " mechtrak_flip_last");
+
     cvarManager->registerNotifier("stats_end_session", [this](std::vector<std::string>) {
         sessionActive = false;
         Session::SaveToFile(cvarManager, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes);
         Session::Upload(cvarManager, gameWrapper, sessionId, sessionActive, sessionStartTime, shotStats, shotTypes, currentShotNumber);
-        sessionId = Session::GenerateId(); sessionStartTime = std::chrono::system_clock::now(); sessionActive = true;
-        shotStats.clear(); shotTypes.clear(); currentShotNumber = 1;
-        shotStats[currentShotNumber] = ShotStats(); shotTypes[currentShotNumber] = "Unknown";
-        cvarManager->log("New session started: " + sessionId);
+        shotStats.clear();
+        shotTypes.clear();
+        currentShotNumber = 1;
+        cvarManager->log("Session ended.");
         }, "End session", PERMISSION_ALL);
 
     cvarManager->executeCommand("bind F8 stats_key_prev");

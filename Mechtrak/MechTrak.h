@@ -52,4 +52,5 @@ public:
     bool        IsActiveOverlay()               override { return false; }
     void        OnOpen()                        override {}
     void        OnClose()                       override {}
+    bool showEditPanel = false;
 };
